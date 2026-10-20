@@ -1,0 +1,40 @@
+# Rust build artifacts
+target/
+**/target/
+
+# Executables & Binaries
+*.exe
+**/*.exe
+*.pdb
+**/*.pdb
+
+# Environment variables & secrets
+.env
+**/.env
+.env.*
+**/.env.*
+
+# Large Backup & Legacy folders
+esp32_legacy_backup/
+*.zip
+*.tar.gz
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# IDE and Editor files
+.vscode/
+**/.vscode/
+.idea/
+**/.idea/
+
+# Logs
+*.log
+**/*.log
+dataset/logs/
+
+# OS specific files
+Thumbs.db
+.DS_Store
