@@ -35,6 +35,12 @@ __pycache__/
 **/*.log
 dataset/logs/
 
-# OS specific files
-Thumbs.db
-.DS_Store
+# Hardware, firmware, models, and tools
+backend/
+esp32/
+esp32_no_std/
+firmware/
+models/
+tools/
+LAPORAN SEMENTARA/
+

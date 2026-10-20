@@ -256,7 +256,7 @@ module.exports = async (req, res) => {
         return res.status(200).json({
           success: tbRes?.status >= 200 && tbRes?.status < 300,
           cmd_seq: cmdSeq,
-          message: '⚡ Perintah OTA Trigger berhasil disiarkan ke ThingsBoard Cloud!'
+          message: 'Perintah OTA Trigger berhasil disiarkan ke ThingsBoard Cloud!'
         });
       }
 
