@@ -1,0 +1,10 @@
+# Ignore Rust backend and ESP32 microcontroller files on Vercel
+Cargo.toml
+Cargo.lock
+backend/
+esp32/
+esp32_no_std/
+firmware/
+models/
+tools/
+*.bat
