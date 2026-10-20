@@ -24,6 +24,8 @@ let memLiveTelemetry = null;
 let memLastTelemetryMs = 0;
 let memActiveCmd = 'IDLE';
 let memActiveCmdSeq = 0;
+let memLastTbTs = null;
+let memLastTbChangeMs = 0;
 
 function httpRequest(options, bodyStr = null) {
   return new Promise((resolve, reject) => {
@@ -174,10 +176,25 @@ module.exports = async (req, res) => {
 
         let clientAttrs = tbRes?.json?.client || {};
         if (clientAttrs.live_telemetry && clientAttrs.live_telemetry.sensors) {
-          isEspActive = true;
+          const currTs = clientAttrs.live_telemetry.timestamp ?? clientAttrs.live_telemetry.status?.elapsed_time ?? null;
+          const now = Date.now();
+
+          if (currTs !== null && currTs !== memLastTbTs) {
+            memLastTbTs = currTs;
+            memLastTbChangeMs = now;
+            isEspActive = true;
+          } else {
+            // Jika timestamp tidak berubah: hanya aktif jika baru saja berubah dalam <= 8 detik terakhir
+            if (memLastTbChangeMs > 0 && (now - memLastTbChangeMs <= 8000)) {
+              isEspActive = true;
+            } else {
+              isEspActive = false;
+            }
+          }
+
           liveTelemetry = clientAttrs.live_telemetry;
           fwVer = clientAttrs.fw_version || fwVer;
-          activeMode = 'thingsboard_cloud_relay';
+          activeMode = isEspActive ? 'thingsboard_cloud_relay' : 'offline';
         }
       }
 
@@ -189,6 +206,8 @@ module.exports = async (req, res) => {
         live_telemetry: liveTelemetry,
         fw_version: fwVer,
         status: isEspActive ? 'ONLINE' : 'OFFLINE',
+        is_stale: !isEspActive,
+        device_timestamp: memLastTbTs,
         timestamp: new Date().toISOString()
       });
     }

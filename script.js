@@ -307,6 +307,8 @@ if (document.readyState === 'loading') {
 // Hardware Link Tracker
 let isHardwareCurrentlyConnected = false;
 let wasHardwareDisconnected = true;
+let lastSeenCloudDeviceTs = null;
+let lastSeenCloudDeviceChangeMs = 0;
 let customFirmwareFile = null;
 let isDeployingOta = false;
 
@@ -334,13 +336,30 @@ async function checkEspHardwareStatus() {
         const lt = cloudData.live_telemetry || {};
         const s = lt.sensors || {};
         const st = lt.status || {};
+        const devTs = lt.timestamp ?? st.elapsed_time ?? cloudData.device_timestamp ?? null;
+        const now = Date.now();
+        let isFresh = (cloudData.esp_connected === true) && (!cloudData.is_stale);
+
+        if (devTs !== null && devTs !== undefined) {
+          if (devTs !== lastSeenCloudDeviceTs) {
+            lastSeenCloudDeviceTs = devTs;
+            lastSeenCloudDeviceChangeMs = now;
+            isFresh = true;
+          } else {
+            // Timestamp tidak bertambah: jika sudah lebih dari 7 detik tidak ada pembaruan, anggap offline
+            if (lastSeenCloudDeviceChangeMs > 0 && (now - lastSeenCloudDeviceChangeMs > 7000)) {
+              isFresh = false;
+            }
+          }
+        }
+
         data = {
-          esp_connected: !!cloudData.esp_connected,
+          esp_connected: isFresh,
           port: 'IoT Nirkabel (Wi-Fi / Cloud)',
           connection_mode: 'wireless_iot',
-          wifi_ssid: 'Wi-Fi IoT Cloud',
-          wifi_ip: 'ThingsBoard Cloud Relay',
-          rgb_led: cloudData.esp_connected ? 'Aktif (IoT Nirkabel)' : 'Offline (Perangkat Mati / Tercabut)',
+          wifi_ssid: isFresh ? 'Wi-Fi IoT Cloud' : 'Tidak Terhubung',
+          wifi_ip: isFresh ? 'ThingsBoard Cloud Relay' : 'Offline',
+          rgb_led: isFresh ? 'Aktif (IoT Nirkabel)' : 'Offline (Perangkat Mati / Tercabut)',
           active_firmware_version: cloudData.fw_version || st.firmware_version || '1.2.0',
           dht1_temp: typeof s.dht1_temp === 'number' ? s.dht1_temp : 0,
           dht1_hum: typeof s.dht1_hum === 'number' ? s.dht1_hum : 0,
@@ -496,23 +515,28 @@ function handleHardwareUnplugged(reason = 'ESP32 Offline / Tercabut!') {
 
   // JIKA DALAM MODE SIMULATOR
   if (isSimMode) {
+    isHardwareCurrentlyConnected = true;
+    wasHardwareDisconnected = false;
     if (espBadge) {
       espBadge.textContent = 'SIMULATOR';
       espBadge.className = 'esp-badge online';
     }
     if (espStatusDot) {
-      espStatusDot.style.background = '#f59e0b';
-      espStatusDot.style.boxShadow = '0 0 10px #f59e0b';
+      espStatusDot.style.background = '#38bdf8';
+      espStatusDot.style.boxShadow = '0 0 10px #38bdf8';
     }
     if (espStatusBox) {
       espStatusBox.classList.remove('hardware-unplugged');
     }
     if (espDetailPort) {
       espDetailPort.textContent = 'Simulator Lokal (SIM-01)';
-      espDetailPort.className = 'esp-detail-value font-mono text-amber';
+      espDetailPort.className = 'esp-detail-value font-mono text-cyan';
     }
     return;
   }
+
+  isHardwareCurrentlyConnected = false;
+  wasHardwareDisconnected = true;
 
   // JIKA PERANGKAT ESP32 MATI / OFFLINE (BAIK MODE IOT MAUPUN KABEL USB)
   if (espBadge) {
@@ -527,7 +551,7 @@ function handleHardwareUnplugged(reason = 'ESP32 Offline / Tercabut!') {
     espStatusBox.classList.add('hardware-unplugged');
   }
   if (espDetailPort) {
-    espDetailPort.textContent = 'Terputus (ESP32 Offline)';
+    espDetailPort.textContent = 'Terputus (ESP32 Offline / Stop Kontak Dicabut)';
     espDetailPort.className = 'esp-detail-value font-mono text-danger';
   }
   if (espDetailWifi) {
@@ -556,7 +580,7 @@ function handleHardwareUnplugged(reason = 'ESP32 Offline / Tercabut!') {
   updateMetricCards();
 
   // JIKA SEDANG TERKONEKSI: OTOMATIS DISKONEK AGAR TIDAK BISA KONEK SAAT ESP32 OFFLINE
-  if (state.isConnected) {
+  if (state.isConnected && selectedPort !== 'SIM') {
     setDeviceConnection(false, true);
     updateStatusBadge('idle', 'ESP32 Offline • Koneksi Terputus');
     showToast(`${reason} Koneksi diputus otomatis.`, 'danger');
@@ -1571,10 +1595,52 @@ window.testSamplePreset = function(grade) {
  * - Respon spesifik berdasarkan tingkat sangrai / defect kopi
  */
 function generateDummyCoffeePacket() {
-  // Semua data dummy dihapus: kembalikan 0 jika tidak ada data riil hardware
-  const packetValues = [0, 0, 0, 0, 0, 0, 0, 0];
-  state.sensors.forEach((sensor) => {
-    sensor.currentVal = 0;
+  const t = Math.max(0, Math.min(300, Number(state.elapsedSeconds || 0)));
+  const coffeeName = (state.coffeeName || state.coffeeSampleName || 'Robusta Dampit').toLowerCase();
+
+  // Baseline sensor gas (mV) dalam tabung chamber saat udara bersih
+  const baseVals = [260, 310, 270, 300, 280, 290, 265, 275];
+
+  // Nilai puncak (mV) karakteristik aroma volatil kopi
+  let peakVals = [490.5, 680.0, 315.2, 740.8, 385.0, 495.5, 365.0, 440.0];
+  if (coffeeName.includes('gayo')) {
+    peakVals = [390.0, 785.4, 460.0, 520.0, 335.0, 620.0, 390.0, 510.5];
+  } else if (coffeeName.includes('liberika')) {
+    peakVals = [560.0, 610.0, 490.5, 610.0, 420.0, 540.0, 340.0, 595.0];
+  } else if (coffeeName.includes('ijen')) {
+    peakVals = [365.0, 710.0, 380.0, 490.0, 320.0, 580.0, 440.0, 420.0];
+  }
+
+  // Hitung respon VOC berdasarkan fase SOP (1-300 detik)
+  // Phase 1 (0-30s): Baseline chamber udara bersih
+  // Phase 2 (31-130s): Injeksi aroma & adsorpsi dinamis
+  // Phase 3 (131-230s): Steady-state sensing
+  // Phase 4 (231-300s): Purging / bilas udara bersih
+  const packetValues = baseVals.map((base, idx) => {
+    const peak = peakVals[idx];
+    const noise = (Math.random() - 0.5) * 3.0;
+    let v = base;
+
+    if (!state.isSampling) {
+      // Saat standby sebelum sampling: stabil di baseline udara bersih
+      v = base + noise;
+    } else if (t <= 30) {
+      v = base + noise;
+    } else if (t <= 130) {
+      const progress = 1 - Math.exp(-(t - 30) / 28);
+      v = base + (peak - base) * progress + noise;
+    } else if (t <= 230) {
+      v = peak + noise;
+    } else {
+      const decay = Math.exp(-(t - 230) / 22);
+      v = base + (peak - base) * decay + noise;
+    }
+    return Number(Math.max(100, Math.min(950, v)).toFixed(1));
+  });
+
+  // Perbarui currentVal pada state sensor agar kartu indikator mV dan statistik sinkron
+  state.sensors.forEach((sensor, idx) => {
+    sensor.currentVal = packetValues[idx];
   });
 
   return {
@@ -3093,8 +3159,7 @@ const offlineTelemetryBuffer = [];
 let offlineReconnectTimer = null;
 
 function startCloudRelayStream() {
-  updateStatusBadge('connected', '️ ThingsBoard Cloud Relay Terhubung (Siap Sampling)');
-  showToast('Terhubung via ThingsBoard Cloud Relay (IoT Nirkabel)', 'success');
+  updateStatusBadge('idle', 'Mencari sinyal ESP32 (Cloud Relay)...');
 
   if (state.streamInterval) {
     clearInterval(state.streamInterval);
@@ -3103,20 +3168,43 @@ function startCloudRelayStream() {
 
   const pollCloud = async () => {
     if (!state.isConnected) return;
+    const selectedPort = document.getElementById('portSelect')?.value || 'AZURE_IOT_HUB';
+    if (selectedPort === 'SIM') return;
+
     try {
       const cloudRes = await fetch('/api/cloud').catch(() => null);
       if (cloudRes && cloudRes.ok) {
         const cloudJson = await cloudRes.json();
-        if (cloudJson && cloudJson.live_telemetry && cloudJson.live_telemetry.sensors) {
-          const lt = cloudJson.live_telemetry;
-          const s = lt.sensors || {};
-          const st = lt.status || {};
+        const lt = cloudJson.live_telemetry;
+        const s = lt?.sensors || {};
+        const st = lt?.status || {};
+        const devTs = lt?.timestamp ?? st?.elapsed_time ?? cloudJson.device_timestamp ?? null;
+        const now = Date.now();
+        let isFresh = (cloudJson.esp_connected === true) && (!cloudJson.is_stale);
+
+        if (devTs !== null && devTs !== undefined) {
+          if (devTs !== lastSeenCloudDeviceTs) {
+            lastSeenCloudDeviceTs = devTs;
+            lastSeenCloudDeviceChangeMs = now;
+            isFresh = true;
+          } else {
+            // Timestamp tidak bertambah: jika sudah lebih dari 7 detik tidak ada pembaruan, anggap offline
+            if (lastSeenCloudDeviceChangeMs > 0 && (now - lastSeenCloudDeviceChangeMs > 7000)) {
+              isFresh = false;
+            }
+          }
+        }
+
+        if (isFresh && s.mq6 !== undefined) {
+          isHardwareCurrentlyConnected = true;
+          wasHardwareDisconnected = false;
           const dht1 = (lt.dht1 && typeof lt.dht1 === 'object') ? lt.dht1 : null;
           const dht2 = (lt.dht2 && typeof lt.dht2 === 'object') ? lt.dht2 : null;
           const d1t = dht1 ? dht1.temp : (s.dht1_temp ?? lt.temperature ?? 0);
           const d1h = dht1 ? dht1.hum : (s.dht1_hum ?? lt.humidity ?? 0);
           const d2t = dht2 ? dht2.temp : (s.dht2_temp ?? d1t);
           const d2h = dht2 ? dht2.hum : (s.dht2_hum ?? d1h);
+
           handleRustTelemetryPacket({
             sensor_data: {
               timestamp: new Date().toISOString().slice(0, 19).replace('T', ' '),
@@ -3139,10 +3227,15 @@ function startCloudRelayStream() {
             },
             tinyml: lt.tinyml || null
           });
+
           if (!state.isSampling) {
-            updateStatusBadge('connected', `️ Cloud Relay Terhubung (Lintas Hotspot • v${st.firmware_version || cloudJson.fw_version || '1.2.0'})`);
+            updateStatusBadge('connected', `IoT Nirkabel Aktif (v${st.firmware_version || cloudJson.fw_version || '1.2.0'})`);
           }
           return;
+        } else {
+          // Hardware offline / stop kontak dicabut
+          isHardwareCurrentlyConnected = false;
+          handleHardwareUnplugged('ESP32 Offline (Stop kontak dicabut / data berhenti)');
         }
       }
     } catch (_) {}
@@ -3152,7 +3245,7 @@ function startCloudRelayStream() {
       if (offlineTelemetryBuffer.length < 500) {
         offlineTelemetryBuffer.push(dummy);
       }
-      updateStatusBadge('idle', ` Offline Buffer: ${offlineTelemetryBuffer.length} paket`);
+      updateStatusBadge('idle', `Offline Buffer: ${offlineTelemetryBuffer.length} paket`);
     }
   };
 
@@ -3161,11 +3254,15 @@ function startCloudRelayStream() {
 }
 
 function connectWebSocketBackend() {
+  const selectedPort = document.getElementById('portSelect')?.value || 'AZURE_IOT_HUB';
+  if (selectedPort === 'SIM') {
+    startLocalSimulation();
+    return;
+  }
+
   const isHttps = typeof window !== 'undefined' && window.location && window.location.protocol === 'https:';
   if (isHttps) {
-    // Pada origin HTTPS (seperti https://iotproject-kappa.vercel.app/), browser melarang
-    // koneksi WebSocket ws:// tidak aman (Mixed Content SecurityError).
-    // Gunakan Cloud Relay Poller (/api/cloud) yang langsung membaca telemetri ThingsBoard.
+    // Pada origin HTTPS (seperti di Vercel), gunakan Cloud Relay Poller (/api/cloud)
     startCloudRelayStream();
     return;
   }
@@ -3313,15 +3410,19 @@ function connectWebSocketBackend() {
 }
 
 function startLocalSimulation() {
-  const port = document.getElementById('portSelect').value;
+  const port = document.getElementById('portSelect')?.value || 'SIM';
   const hz = (1000 / state.samplingRateMs).toFixed(1);
-  updateStatusBadge('connected', `Simulasi Standby: ${port} (${hz} Hz)`);
-  if (!state.streamInterval) {
-    state.streamInterval = setInterval(() => {
-      const packet = generateDummyCoffeePacket();
-      handleIncomingDataPacket(packet);
-    }, state.samplingRateMs);
+  updateStatusBadge('connected', `Simulator Lokal Aktif: ${port} (${hz} Hz)`);
+  showToast('Terhubung ke Simulator Lokal (SIM-01)', 'success');
+  if (state.streamInterval) {
+    clearInterval(state.streamInterval);
+    state.streamInterval = null;
   }
+  state.streamInterval = setInterval(() => {
+    if (!state.isConnected) return;
+    const packet = generateDummyCoffeePacket();
+    handleIncomingDataPacket(packet);
+  }, state.samplingRateMs);
 }
 
 function startUptimeTimer() {
@@ -4446,9 +4547,14 @@ function startSamplingSession() {
   }
 
   // Jika perangkat belum terhubung (Sistem 1 Standby), hubungkan sekarang
+  const selectedPort = document.getElementById('portSelect')?.value || 'AZURE_IOT_HUB';
   if (!state.isConnected) {
+    if (selectedPort !== 'SIM' && !isHardwareCurrentlyConnected) {
+      showToast('ESP32 sedang Offline (Stop kontak belum terhubung). Nyalakan ESP32 atau pilih "Simulator Lokal (SIM-01)" pada panel kiri untuk pengujian.', 'danger');
+      return;
+    }
     setDeviceConnection(true);
-    showToast('Perangkat ESP32 otomatis dihubungkan untuk pembacaan sensor langsung...', 'info');
+    showToast('Perangkat otomatis dihubungkan untuk pembacaan sensor langsung...', 'info');
   }
 
   // Detik tepat saat tombol Start Sampling ditekan menjadi detik awal (t = 0s / timestamp_ms = 0)
@@ -4470,8 +4576,7 @@ function startSamplingSession() {
     s.count = 0;
   });
 
-  const selectedPort = document.getElementById('portSelect')?.value || 'COM6';
-  updateStatusBadge('streaming', ` SAMPLING 300s AKTIF (t=0s) • ${state.coffeeSampleName}`);
+  updateStatusBadge('streaming', `SAMPLING 300s AKTIF (t=0s) • ${state.coffeeSampleName}`);
   const engineTag = document.querySelector('.engine-tag');
   if (engineTag) {
     engineTag.innerHTML = `<span class="engine-dot" style="background:#ef4444;box-shadow:0 0 10px #ef4444;"></span>${selectedPort} Direct Sensor Reading (300s)`;
@@ -4520,14 +4625,20 @@ function startSamplingSession() {
     }).catch(() => {});
   }
 
-  // Trigger respon VOC kopi (pembacaan sensor langsung)
+  // Injeksi profil respons VOC aroma kopi
   triggerCoffeeAromaInjection();
+
+  // Jika dalam mode Simulator atau hardware belum aktif, bangkitkan paket awal t=0s
+  if (selectedPort === 'SIM' || !isHardwareCurrentlyConnected) {
+    state.elapsedSeconds = 0;
+    generateDummyCoffeePacket();
+  }
 
   // Rekam titik awal t = 0s (timestamp_ms = 0) tepat saat tombol Start Sampling ditekan!
   recordSamplingDataPoint(0);
   updateSopTimeline(0);
 
-  showToast(` Sampling dimulai dari t = 0s (${formatSamplingClockTimestamp(0)}): "${state.coffeeSampleName}"`, 'success');
+  showToast(`Sampling dimulai dari t = 0s (${formatSamplingClockTimestamp(0)}): "${state.coffeeSampleName}"`, 'success');
 
   // Bersihkan interval sampling lama jika ada
   if (state.samplingTimerInterval) {
@@ -4541,6 +4652,12 @@ function startSamplingSession() {
     state.elapsedSeconds = elapsed;
     const pct = Math.min(100, Math.round((elapsed / 300) * 100));
     const timeFormatted = formatSecondsMMSS(state.samplingTimeLeft);
+
+    // Jika dalam mode Simulator atau hardware tidak terhubung, bangkitkan respon dinamis SOP per detik
+    const curPort = document.getElementById('portSelect')?.value || 'AZURE_IOT_HUB';
+    if (curPort === 'SIM' || !isHardwareCurrentlyConnected) {
+      generateDummyCoffeePacket();
+    }
 
     // Rekam titik data detik ke-elapsed (1s, 2s, ..., 300s) ke dataset CSV/Excel/JSON
     recordSamplingDataPoint(elapsed);
@@ -5735,15 +5852,27 @@ function initEventListeners() {
   const portSelect = document.getElementById('portSelect');
   if (portSelect) {
     portSelect.addEventListener('change', () => {
-      checkEspHardwareStatus();
       const val = portSelect.value;
-      if (val === 'AZURE_IOT_HUB') {
-        showToast('️ Mode Cloud Nirkabel (Azure IoT Hub & Wi-Fi) dipilih!', 'success');
-        showToast('️ Mode Nirkabel Full IoT • Wi-Fi Hotspot POCO (UDP 5005) dipilih!', 'success');
-      } else if (val === 'SIM') {
-        showToast(' Mode Simulasi VOC Robusta dipilih.', 'info');
+      if (val === 'SIM') {
+        isHardwareCurrentlyConnected = true;
+        wasHardwareDisconnected = false;
+        checkEspHardwareStatus();
+        if (state.isConnected) {
+          startLocalSimulation();
+        }
+        showToast('Mode Simulasi VOC Robusta dipilih.', 'info');
+      } else if (val === 'AZURE_IOT_HUB') {
+        checkEspHardwareStatus();
+        if (state.isConnected) {
+          connectWebSocketBackend();
+        }
+        showToast('Mode Cloud Nirkabel (IoT Wi-Fi) dipilih.', 'info');
       } else {
-        showToast(` Port Serial Hardware ${val} dipilih.`, 'info');
+        checkEspHardwareStatus();
+        if (state.isConnected) {
+          connectWebSocketBackend();
+        }
+        showToast(`Port Serial Hardware ${val} dipilih.`, 'info');
       }
     });
   }
